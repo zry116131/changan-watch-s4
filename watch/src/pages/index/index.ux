@@ -1,0 +1,162 @@
+<template>
+  <stack class="screen">
+    <swiper id="pager" class="pager" index="{{ page }}" loop="{{ false }}" indicator="{{ false }}" duration="220" onchange="onPageChange">
+    <div class="sheet" for="{{ cards }}">
+    <div class="content">
+      <text class="title">UNI-V  /  车况</text>
+      <text class="status">{{ status }}</text>
+      <div class="hero" if="{{ $item.hero }}">
+        <div class="range"><text class="range-number">{{ rangeNumber }}</text><text class="range-unit">{{ rangeUnit }}</text></div>
+        <text class="range-caption">剩余续航</text>
+        <div class="fuel-row"><text class="fuel-label">剩余油量</text><text class="fuel-value">{{ fuel }}</text></div>
+        <div class="fuel-track"><div class="fuel-fill" style="width: {{ fuelWidth }}px;"></div></div>
+        <div class="stats">
+          <div class="stat"><text class="stat-label">总里程</text><text class="stat-value">{{ odometer }}</text></div>
+          <div class="stat"><text class="stat-label">百公里油耗</text><text class="stat-value">{{ consumption }}</text></div>
+        </div>
+      </div>
+      <div class="details" if="{{ !$item.hero }}">
+        <text class="section">{{ $item.title }}</text>
+        <div class="row" for="{{ $item.rows }}">
+          <text class="label">{{ $item.label }}</text>
+          <text class="value">{{ $item.value }}</text>
+        </div>
+      </div>
+      <text class="time">{{ reported }}</text>
+      <div class="actions">
+        <text class="page-hint">{{ $item.number }}/3 · 左右滑动</text>
+        <text class="button primary" onclick="refresh">{{ refreshing ? '读取中' : '刷新' }}</text>
+      </div>
+    </div>
+    </div>
+    </swiper>
+  </stack>
+</template>
+<script>
+import fetch from '@system.fetch'
+import connection from '../../common/connection'
+
+var sections = [
+  {title: '续航与油量', keys: ['remaining_range','fuel_percent','odometer','fuel_consumption']},
+  {title: '温度与状态', keys: ['cabin_temperature','battery_voltage','engine_running','air_conditioner']},
+  {title: '四轮胎压', keys: ['tire_pressure_fl','tire_pressure_fr','tire_pressure_rl','tire_pressure_rr']}
+]
+var labels = {remaining_range:'剩余续航',fuel_percent:'剩余油量',odometer:'总里程',fuel_consumption:'平均油耗',cabin_temperature:'车内温度',battery_voltage:'电瓶电压',engine_running:'发动机',air_conditioner:'空调',tire_pressure_fl:'左前轮',tire_pressure_fr:'右前轮',tire_pressure_rl:'左后轮',tire_pressure_rr:'右后轮'}
+export default {
+  private: { status:'未连接', section:'续航与油量', rows:[], cards:[], reported:'车辆上报时间未知', refreshing:false, page:0, rangeNumber:'—', rangeUnit:'km', fuel:'—', fuelWidth:0, odometer:'—', consumption:'—' },
+  onInit() { this._data = {}; this._request = 0; this.renderRows(); this.refresh() },
+  onDestroy() { this._request++; clearTimeout(this._timer) },
+  movePage(direction) {
+    var next = Math.max(0, Math.min(sections.length - 1, this.page + direction))
+    if(next === this.page) return
+    this.page = next
+    this.$element('pager').swipeTo({index:next})
+  },
+  onPageChange(event) {
+    var index = Number(event.index)
+    if(index >= 0 && index < sections.length) this.page = index
+  },
+  onBackPress() {
+    if(this.page > 0) { this.movePage(-1); return true }
+    return false
+  },
+  renderRows() {
+    var s = sections[this.page]
+    this.section = s.title
+    this.cards = sections.map((section, index) => ({number:index + 1, hero:index === 0, title:section.title, rows:section.keys.map(key => ({label:labels[key], value:this._data[key] || '—'}))}))
+    var range = (this._data.remaining_range || '— km').split(' ')
+    this.rangeNumber = range[0]; this.rangeUnit = range.slice(1).join(' ')
+    this.fuel = this._data.fuel_percent || '—'
+    var percent = parseFloat(this.fuel)
+    this.fuelWidth = isFinite(percent) ? Math.max(0, Math.min(100, percent)) * 3.16 : 0
+    this.odometer = this._data.odometer || '—'
+    this.consumption = this._data.fuel_consumption || '—'
+  },
+  refresh() {
+    if(this.refreshing) return
+    if(!connection.baseUrl || !connection.key) {
+      if(connection.probeUrl) { this.probe(); return }
+      this.status = '待配置 HA 连接'; return
+    }
+    this.refreshing = true
+    this.status = '正在读取 HA'
+    var id = ++this._request
+    this._timer = setTimeout(() => {
+      if(id !== this._request) return
+      this._request++; this.refreshing = false; this.status = '连接超时 · 显示旧值'
+    }, 15000)
+    fetch.fetch({
+      url: connection.baseUrl + '/v1/status', method:'GET', responseType:'text',
+      header: {Authorization: 'Bearer ' + connection.key},
+      success: response => {
+        if(id !== this._request) return
+        clearTimeout(this._timer); this.refreshing = false
+        if(response.code !== 200) { this.status = '读取失败 ' + response.code + ' · 旧值'; return }
+        try {
+          var data = typeof response.data === 'string' ? JSON.parse(response.data) : response.data
+          if(data.schema !== 1 || !data.values) throw new Error('schema')
+          this._data = data.values
+          this.status = data.warning || 'HA 读取成功'
+          this.reported = data.vehicle_reported_display ? '车辆上报 ' + data.vehicle_reported_display : '车辆上报时间未知'
+          this.renderRows()
+        } catch(e) { this.status = '数据格式错误 · 显示旧值' }
+      },
+      fail: () => {
+        if(id !== this._request) return
+        clearTimeout(this._timer); this.refreshing = false; this.status = '连接失败 · 显示旧值'
+      }
+    })
+  },
+  probe() {
+    this.refreshing = true; this.status = '验证手表联网'
+    var id = ++this._request
+    this._timer = setTimeout(() => {
+      if(id !== this._request) return
+      this._request++; this.refreshing = false; this.status = '网络验证超时'
+    }, 12000)
+    fetch.fetch({url:connection.probeUrl, method:'GET', responseType:'text',
+      success: response => {
+        if(id !== this._request) return
+        clearTimeout(this._timer); this.refreshing = false
+        this.status = response.code === 200 ? '网络通过 · 待接入 HA' : '网络返回 ' + response.code
+      },
+      fail: (data, code) => {
+        if(id !== this._request) return
+        clearTimeout(this._timer); this.refreshing = false; this.status = '网络不可用 ' + code
+      }
+    })
+  }
+}
+</script>
+<style>
+.screen { width:466px; height:466px; background-color:#05090e; }
+.pager { width:466px; height:466px; background-color:#05090e; }
+.sheet { width:466px; height:466px; background-color:#05090e; flex-direction:column; align-items:center; justify-content:center; }
+.page-hint { width:150px; height:50px; color:#8199ad; text-align:center; font-size:18px; margin-right:6px; }
+.content { width:390px; height:380px; flex-direction:column; align-items:center; justify-content:center; }
+.title { color:#ecf4fc; font-size:26px; height:34px; font-weight:bold; text-align:center; }
+.status { color:#68ddc4; font-size:18px; height:26px; text-align:center; }
+.hero { width:356px; height:232px; flex-direction:column; align-items:center; }
+.range { height:90px; width:350px; flex-direction:row; justify-content:center; align-items:center; }
+.range-number { color:#f2f8fd; font-size:84px; font-weight:bold; }
+.range-unit { color:#96aabd; font-size:25px; margin-left:8px; margin-top:30px; }
+.range-caption { color:#8199ad; font-size:20px; height:29px; text-align:center; }
+.fuel-row { width:316px; height:35px; flex-direction:row; justify-content:space-between; align-items:center; }
+.fuel-label { color:#9bafc2; font-size:21px; }
+.fuel-value { color:#68ddc4; font-size:26px; font-weight:bold; }
+.fuel-track { width:316px; height:6px; border-radius:3px; background-color:#20313f; }
+.fuel-fill { height:6px; border-radius:3px; background-color:#68ddc4; }
+.stats { width:360px; height:68px; flex-direction:row; justify-content:center; align-items:center; }
+.stat { width:180px; flex-direction:column; align-items:center; }
+.stat-label { color:#8199ad; font-size:17px; height:25px; text-align:center; }
+.stat-value { color:#e5f0f9; font-size:23px; height:30px; text-align:center; }
+.details { width:350px; height:232px; flex-direction:column; }
+.section { color:#8199ad; font-size:20px; height:32px; text-align:center; }
+.row { width:350px; height:49px; flex-direction:row; align-items:center; justify-content:space-between; }
+.label { color:#a4b7c9; font-size:25px; }
+.value { color:#f1f7ff; font-size:29px; font-weight:bold; }
+.time { color:#8199ad; font-size:17px; width:330px; height:30px; text-align:center; lines:1; text-overflow:ellipsis; }
+.actions { flex-direction:row; height:58px; justify-content:center; align-items:center; }
+.button { width:122px; height:50px; border-radius:25px; background-color:#192633; color:#ffffff; text-align:center; font-size:22px; margin-left:6px; margin-right:6px; }
+.primary { background-color:#185d50; }
+</style>

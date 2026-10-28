@@ -1,0 +1,12 @@
+{
+  "package":"cn.zry.changanstatus",
+  "name":"长安车况",
+  "versionName":"0.2.3",
+  "versionCode":6,
+  "minPlatformVersion":1000,
+  "icon":"/common/logo.png",
+  "deviceTypeList":["watch"],
+  "features":[{"name":"system.fetch"}],
+  "config":{"logLevel":"off","designWidth":466},
+  "router":{"entry":"pages/index","pages":{"pages/index":{"component":"index"}}}
+}

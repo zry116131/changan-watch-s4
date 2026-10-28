@@ -1,0 +1,11 @@
+.DS_Store
+.local/
+evidence/
+release/
+watch/node_modules/
+watch/build/
+watch/dist/
+watch/sign/
+watch/src/common/connection.js
+__pycache__/
+*.pyc
